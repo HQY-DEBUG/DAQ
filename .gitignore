@@ -1,0 +1,32 @@
+# 用户指定不得访问或纳入版本控制的内容
+*[sS][lL]2_100*
+_archive/
+.history/
+.env
+.env.*
+!.env.example
+credentials.json
+secrets.*
+# 可重建工程、工具缓存与采集数据
+PL/project/
+PL/build/
+vitis/build/
+PC/build*/
+build/
+artifacts/
+.Xil/
+**/.Xil/
+**/__pycache__/
+*.pyc
+*.jou
+*.log
+*.str
+*.wdb
+*.pb
+*.bit
+*.xsa
+*.elf
+BOOT.BIN
+*.daq
+.vs/
+*.user
