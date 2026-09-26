@@ -1,8 +1,9 @@
 // 文件：daq_data_gen.v
 // 说明：独立的 100 MHz 到 1 MHz、64 bit 递增测试数据源
-// 版本：v1.0
+// 版本：v1.1
 // 日期：2026/09/26
 // 修改历史：
+// v1.1 2026/09/26 修改：采样有效位改为同步复位，避免异步变化到达 BRAM 写使能
 // v1.0 2026/09/26 新增：固定 100 周期采样，不受 DMA 反压改变节拍
 `timescale 1ns/1ps
 
@@ -21,8 +22,8 @@ module daq_data_gen (
     reg [6:0] phase;
     reg [11:0] block_index;
 
-    // 采样事件仅由时钟分频决定；存储不可用时锁存溢出并停止。
-    always @(posedge clk or negedge resetn) begin
+    // 2026/09/26 修改：采样输出同步复位；采样节拍与无缓冲溢出行为保持不变。
+    always @(posedge clk) begin
         if (!resetn) begin
             phase <= 0;
             block_index <= 0;

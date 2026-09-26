@@ -1,11 +1,11 @@
 // 文件：daq_core.v
 // 说明：固定 1 MHz 采样、双块 BRAM 和 AXI-Lite/AXI-Stream 接口
-// 版本：v1.4
+// 版本：v1.5
 // 日期：2026/09/26
 // 修改历史：
+// v1.5 2026/09/26 修改：BRAM 使能相关状态改为同步复位，避免异步控制脚风险
 // v1.4 2026/09/26 修改：BRAM 地址计数器改为同步复位，消除复位断言时的异步地址风险
 // v1.3 2026/09/26 修改：以无复位同步读口访问两块 RAM，使存储映射到 BRAM
-// v1.2 2026/09/26 修改：将存储数组写入移出异步复位块，以支持 BRAM 推断
 `timescale 1ns/1ps
 
 module daq_core (
@@ -229,8 +229,8 @@ module daq_core (
         end
     end
 
-    // 仅接收固定节拍样本脉冲，控制两个 BRAM 的独占所有权。
-    always @(posedge aclk or negedge aresetn) begin
+    // 2026/09/26 修改：块所有权及 AXIS 有效位同步复位，避免异步变化到达 BRAM 使能脚。
+    always @(posedge aclk) begin
         if (!aresetn) begin
             bank0_state <= FREE;
             bank1_state <= FREE;

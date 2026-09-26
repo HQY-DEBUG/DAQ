@@ -1,11 +1,11 @@
 // 文件：tb_daq_core.v
 // 说明：daq_core 固定节拍、双块切换、反压、停机、溢出和 AXI-Lite 仿真
-// 版本：v1.2
+// 版本：v1.3
 // 日期：2026/09/26
 // 修改历史：
+// v1.3 2026/09/26 修改：采样有效脉冲期间断言复位，验证 RAM 写使能被门控
 // v1.2 2026/09/26 修改：验证复位不写 RAM 且旧内容不作为新会话数据输出
 // v1.1 2026/09/26 修改：补 4 KiB 非法地址、无副作用、随机反压与三类停采边界
-// v1.0 2026/09/26 新增：覆盖采样与控制接口的关键契约
 `timescale 1ns/1ps
 
 module tb_daq_core;
@@ -285,6 +285,28 @@ module tb_daq_core;
         write_control(32'h1, 1);
         wait (dut.produced_samples == 4096);
         write_control(32'h0, 0);
+        wait (!dut.sampling);
+        wait (beats == 4096);
+        read_reg(7'h04, 32'd0);
+
+        // 2026/09/26 修改：在采样有效脉冲与 RAM 写入之间复位，写口不得使用旧脉冲。
+        write_control(32'h2, 1);
+        dut.bank0[0] = 64'h456789abcdef0123;
+        ready_manual = 0;
+        write_control(32'h1, 0);
+        wait (dut.sample_valid);
+        rstn = 0;
+        repeat (4) @(negedge clk);
+        if (dut.bank0[0] !== 64'h456789abcdef0123)
+            fail("RAM write enable active during reset");
+        if (tvalid || dut.pending || dut.sampling) fail("reset retained active output");
+        rstn = 1;
+        beats = 0;
+        ready_manual = 1;
+        write_control(32'h2, 1);
+        write_control(32'h1, 0);
+        wait (dut.produced_samples == 4096);
+        write_control(32'h0, 1);
         wait (!dut.sampling);
         wait (beats == 4096);
         read_reg(7'h04, 32'd0);
