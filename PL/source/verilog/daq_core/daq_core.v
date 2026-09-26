@@ -1,10 +1,11 @@
 // 文件：daq_core.v
 // 说明：固定 1 MHz 采样、双块 BRAM 和 AXI-Lite/AXI-Stream 接口
-// 版本：v1.1
+// 版本：v1.4
 // 日期：2026/09/26
 // 修改历史：
-// v1.1 2026/09/26 修改：按接口契约拒绝非法 AXI-Lite 访问及非法 RUN/CLEAR 请求，覆盖完整 4 KiB 地址窗
-// v1.0 2026/09/26 新增：实现固定节拍采样、块所有权、停止排空和溢出锁存
+// v1.4 2026/09/26 修改：BRAM 地址计数器改为同步复位，消除复位断言时的异步地址风险
+// v1.3 2026/09/26 修改：以无复位同步读口访问两块 RAM，使存储映射到 BRAM
+// v1.2 2026/09/26 修改：将存储数组写入移出异步复位块，以支持 BRAM 推断
 `timescale 1ns/1ps
 
 module daq_core (
@@ -68,6 +69,8 @@ module daq_core (
     reg [1:0] bank0_state, bank1_state;
     reg write_bank, read_bank, axis_bank;
     reg [11:0] write_index, read_index;
+    reg [63:0] bank0_read_data, bank1_read_data;
+    reg read_pending, read_pending_last;
     wire [63:0] produced_samples;
     wire sampling, overflow;
     wire sample_valid;
@@ -85,6 +88,9 @@ module daq_core (
     wire write_commit = aw_held && w_held && !s_axi_bvalid;
     wire stream_accept = m_axis_tvalid && m_axis_tready;
     wire stream_last_accept = stream_accept && m_axis_tlast;
+    wire read_issue = !m_axis_tvalid && !read_pending &&
+                      (read_bank ? ((bank1_state == FULL) || (bank1_state == READING)) :
+                                   ((bank0_state == FULL) || (bank0_state == READING)));
     wire bank0_free_now = (bank0_state == FREE) ||
                           (stream_last_accept && axis_bank == 1'b0);
     wire bank1_free_now = (bank1_state == FREE) ||
@@ -92,7 +98,8 @@ module daq_core (
     wire selected_writable = write_bank ?
         ((bank1_state == FILLING) || (write_index == 0 && bank1_free_now)) :
         ((bank0_state == FILLING) || (write_index == 0 && bank0_free_now));
-    wire pending = (bank0_state != FREE) || (bank1_state != FREE) || m_axis_tvalid;
+    wire pending = (bank0_state != FREE) || (bank1_state != FREE) ||
+                   m_axis_tvalid || read_pending;
     wire control_address = aw_addr_hold == 12'h000;
     wire control_byte = w_strb_hold[0];
     wire control_reserved = |w_data_hold[7:2];
@@ -115,6 +122,37 @@ module daq_core (
     assign s_axi_awready = !aw_held && !s_axi_bvalid;
     assign s_axi_wready = !w_held && !s_axi_bvalid;
     assign s_axi_arready = !s_axi_rvalid;
+
+    // 2026/09/26 修改：两块存储使用无复位同步读写口，状态及 AXIS 输出单独复位。
+    always @(posedge aclk) begin
+        if (aresetn && sample_valid) begin
+            if (write_bank) bank1[write_index] <= sample_data;
+            else bank0[write_index] <= sample_data;
+        end
+        if (aresetn && read_issue) begin
+            if (read_bank) bank1_read_data <= bank1[read_index];
+            else bank0_read_data <= bank0[read_index];
+        end
+    end
+
+    // 2026/09/26 修改：地址寄存器在时钟沿复位，复位期间 RAM 端口仍保持禁用。
+    always @(posedge aclk) begin
+        if (!aresetn) begin
+            write_index <= 0;
+            read_index <= 0;
+        end else begin
+            if (clear_pulse) begin
+                write_index <= 0;
+                read_index <= 0;
+            end
+            if (stream_last_accept) read_index <= 0;
+            else if (read_issue) read_index <= read_index + 1'b1;
+            if (sample_valid) begin
+                if (write_index == LAST_INDEX) write_index <= 0;
+                else write_index <= write_index + 1'b1;
+            end
+        end
+    end
 
     // 2026/09/26 修改：先判地址和字节使能，再校验控制位与运行状态；错误写入无副作用。
     always @(posedge aclk or negedge aresetn) begin
@@ -199,8 +237,8 @@ module daq_core (
             write_bank <= 0;
             read_bank <= 0;
             axis_bank <= 0;
-            write_index <= 0;
-            read_index <= 0;
+            read_pending <= 0;
+            read_pending_last <= 0;
             m_axis_tdata <= 0;
             m_axis_tlast <= 0;
             m_axis_tvalid <= 0;
@@ -210,52 +248,38 @@ module daq_core (
                 bank1_state <= FREE;
                 write_bank <= 0;
                 read_bank <= 0;
-                write_index <= 0;
-                read_index <= 0;
+                read_pending <= 0;
             end
 
             if (stream_last_accept) begin
                 if (axis_bank) bank1_state <= FREE;
                 else bank0_state <= FREE;
                 read_bank <= ~read_bank;
-                read_index <= 0;
             end
-            if ((!m_axis_tvalid || m_axis_tready) && !stream_last_accept) begin
-                if (read_bank ? (bank1_state == FULL || bank1_state == READING) :
-                                (bank0_state == FULL || bank0_state == READING)) begin
-                    if (read_bank) begin
-                        m_axis_tdata <= bank1[read_index];
-                        bank1_state <= READING;
-                    end else begin
-                        m_axis_tdata <= bank0[read_index];
-                        bank0_state <= READING;
-                    end
-                    axis_bank <= read_bank;
-                    m_axis_tlast <= (read_index == LAST_INDEX);
-                    m_axis_tvalid <= 1;
-                    read_index <= read_index + 1'b1;
-                end else begin
-                    m_axis_tvalid <= 0;
-                    m_axis_tlast <= 0;
-                end
-            end else if (stream_last_accept) begin
+            if (read_issue) begin
+                if (read_bank) bank1_state <= READING;
+                else bank0_state <= READING;
+                axis_bank <= read_bank;
+                read_pending_last <= (read_index == LAST_INDEX);
+                read_pending <= 1;
+            end else if (read_pending) begin
+                m_axis_tdata <= axis_bank ? bank1_read_data : bank0_read_data;
+                m_axis_tlast <= read_pending_last;
+                m_axis_tvalid <= 1;
+                read_pending <= 0;
+            end else if (stream_accept) begin
                 m_axis_tvalid <= 0;
                 m_axis_tlast <= 0;
             end
 
             if (sample_valid) begin
                 if (write_bank) begin
-                    bank1[write_index] <= sample_data;
                     bank1_state <= (write_index == LAST_INDEX) ? FULL : FILLING;
                 end else begin
-                    bank0[write_index] <= sample_data;
                     bank0_state <= (write_index == LAST_INDEX) ? FULL : FILLING;
                 end
                 if (write_index == LAST_INDEX) begin
-                    write_index <= 0;
                     write_bank <= ~write_bank;
-                end else begin
-                    write_index <= write_index + 1'b1;
                 end
             end
         end

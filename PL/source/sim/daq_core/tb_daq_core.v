@@ -1,8 +1,9 @@
 // 文件：tb_daq_core.v
 // 说明：daq_core 固定节拍、双块切换、反压、停机、溢出和 AXI-Lite 仿真
-// 版本：v1.1
+// 版本：v1.2
 // 日期：2026/09/26
 // 修改历史：
+// v1.2 2026/09/26 修改：验证复位不写 RAM 且旧内容不作为新会话数据输出
 // v1.1 2026/09/26 修改：补 4 KiB 非法地址、无副作用、随机反压与三类停采边界
 // v1.0 2026/09/26 新增：覆盖采样与控制接口的关键契约
 `timescale 1ns/1ps
@@ -269,6 +270,24 @@ module tb_daq_core;
         write_control(32'h2, 1);
         read_reg(7'h04, 32'h0);
         read_reg(7'h08, 32'd0);
+
+        // 2026/09/26 修改：RAM 内容不随复位清零，但输出所有权必须清除并只读完整的新块。
+        dut.bank0[0] = 64'hdeadcafe12345678;
+        @(negedge clk); rstn = 0;
+        repeat (4) @(negedge clk);
+        if (dut.bank0[0] !== 64'hdeadcafe12345678)
+            fail("RAM changed during reset");
+        if (tvalid || dut.pending || dut.sampling) fail("reset leaked old block");
+        rstn = 1;
+        beats = 0;
+        write_control(32'h2, 0);
+        ready_manual = 1;
+        write_control(32'h1, 1);
+        wait (dut.produced_samples == 4096);
+        write_control(32'h0, 0);
+        wait (!dut.sampling);
+        wait (beats == 4096);
+        read_reg(7'h04, 32'd0);
         $display("PASS: AXI-Lite errors, fixed rate, BRAM ownership, random stalls, stop boundaries, overflow/clear");
         $finish;
     end
