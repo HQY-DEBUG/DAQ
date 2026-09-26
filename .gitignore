@@ -2,6 +2,7 @@
 *[sS][lL]2_100*
 _archive/
 .history/
+.codex/
 .env
 .env.*
 !.env.example
