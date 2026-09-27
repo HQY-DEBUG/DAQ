@@ -8,6 +8,12 @@
 协议入口：Doc/控制协议/协议实现约定.md，保留原网络配置和外层帧结构。
 
 版本记录（最新优先）
+v1.10 2026/09/27
+- 完成模块化及官方 BRAM IP 版全量 Vivado 2022.1 构建与同一 daq.tcl verify；源码基线 68f0741，四项模块/集成仿真已在上一阶段通过。
+- 两个 Block Memory Generator IP 已链接到最终实现，顶层无黑盒、无锁存器，使用 RAMB36E1=15、RAMB18E1=3。100 MHz 时序 WNS=1.515 ns、WHS=0.040 ns，TNS/THS=0，未约束内部端点=0，无 REQP-1839/1840。
+- 新 bit 与 XSA 内 bit 校验一致。首次 PS7 综合出现 Vivado 访问异常，保留证据后相同源码完整重试通过；既有官方互连/DMA 提示保留，详情见 PL/验证记录.md。
+- 本阶段接受为 PS 开发用离线硬件基线；板卡联调及 72 小时实测尚未进行。用户 data_gen 排版和六个旧文件删除保持原状。
+
 v1.9 2026/09/27
 - PL 按功能拆分为 daq_core 顶层、daq_data_gen、daq_axi_lite_regs、daq_ping_pong_buffer 和 daq_axis_streamer；寄存器与外部数据接口保持原契约。
 - 两块 4096×64 缓冲改为 Xilinx Block Memory Generator 8.4 IP 实例，不再手写存储数组；A 口写、B 口同步读，实际读延迟 1 拍。唯一 daq.tcl 维护 IP 配置和仿真入口。
