@@ -1,11 +1,11 @@
 # 文件：daq.tcl
 # 说明：Vivado 2022.1 DAQ 工程重建唯一入口；参数来自原始工程
-# 版本：v1.2
-# 日期：2026/09/26
+# 版本：v1.3
+# 日期：2026/09/27
 # 修改历史：
+# v1.3 2026/09/27 修改：登记拆分模块及官方双口 BRAM IP，增加 IP 仿真入口
 # v1.2 2026/09/26 修改：锁定 Vivado 版本并将时钟、未约束路径及建立保持检查设为导出门槛
 # v1.1 2026/09/26 修改：清理首版重复日期注释，保持板配置和构建步骤
-# v1.0 2026/09/26 修改：实现双 BRAM、SG DMA、PS 原板参数和 bit/XSA 构建
 # [废弃] 2026/09/26 原 32 bit 非 SG 设计保存在 Git 基线 5abcb54，替代为本文件的新 BD 实现，计划 v1.3 清理历史实现。
 set origin_dir [file dirname [file normalize [info script]]]
 if {[version -short] ne "2022.1"} {
@@ -877,11 +877,67 @@ if {[llength $argv] > 0 && [lindex $argv 0] eq "verify"} {
     puts "DAQ_EXISTING_TIMING_DRC_VERIFIED"
     return
 }
+if {[llength $argv] > 0 && [lindex $argv 0] eq "sim"} {
+    set project_dir [file join $origin_dir build daq-ip-sim]
+}
 create_project daq $project_dir -part xc7z020clg400-2 -force
 set_property target_language Verilog [current_project]
 add_files -norecurse [file join $origin_dir source verilog daq_core daq_core.v]
 add_files -norecurse [file join $origin_dir source verilog daq_core daq_data_gen.v]
+add_files -norecurse [file join $origin_dir source verilog daq_core daq_axi_lite_regs.v]
+add_files -norecurse [file join $origin_dir source verilog daq_core daq_ping_pong_buffer.v]
+add_files -norecurse [file join $origin_dir source verilog daq_core daq_axis_streamer.v]
+set bram_xci [file join $origin_dir source ip daq_bram_4096x64 daq_bram_4096x64.xci]
+if {[file exists $bram_xci]} {
+    add_files -norecurse $bram_xci
+} else {
+    create_ip -name blk_mem_gen -vendor xilinx.com -library ip -version 8.4 \
+        -module_name daq_bram_4096x64 -dir [file join $origin_dir source ip]
+}
+set bram_ip [get_ips daq_bram_4096x64]
+if {[llength $bram_ip] != 1} { error "未找到唯一 daq_bram_4096x64 IP" }
+set bram_config [list \
+    CONFIG.Memory_Type {Simple_Dual_Port_RAM} \
+    CONFIG.Write_Width_A {64} \
+    CONFIG.Write_Depth_A {4096} \
+    CONFIG.Read_Width_B {64} \
+    CONFIG.Enable_A {Use_ENA_Pin} \
+    CONFIG.Enable_B {Use_ENB_Pin} \
+    CONFIG.Use_Byte_Write_Enable {false} \
+    CONFIG.Register_PortB_Output_of_Memory_Primitives {false} \
+    CONFIG.Register_PortB_Output_of_Memory_Core {false} \
+    CONFIG.Use_RSTA_Pin {false} \
+    CONFIG.Use_RSTB_Pin {false} \
+]
+set_property -dict $bram_config $bram_ip
+foreach {key value} $bram_config {
+    if {[get_property $key $bram_ip] ne $value} {
+        error "BRAM IP 配置不符：$key 期望 $value，实际 [get_property $key $bram_ip]"
+    }
+}
+generate_target all [get_files $bram_xci]
 update_compile_order -fileset sources_1
+
+if {[llength $argv] > 0 && [lindex $argv 0] eq "sim"} {
+    set sim_top [expr {[llength $argv] > 1 ? [lindex $argv 1] : "tb_daq_core"}]
+    if {$sim_top ni {tb_daq_core tb_daq_axi_lite_regs tb_daq_ping_pong_buffer tb_daq_axis_streamer}} {
+        error "未知仿真顶层：$sim_top"
+    }
+    set sim_dir [string range $sim_top 3 end]
+    add_files -fileset sim_1 -norecurse [file join $origin_dir source sim $sim_dir ${sim_top}.v]
+    set_property top $sim_top [get_filesets sim_1]
+    set_property xsim.simulate.runtime {0ns} [get_filesets sim_1]
+    update_compile_order -fileset sim_1
+    launch_simulation -simset sim_1 -mode behavioral
+    run all
+    if {[get_value /${sim_top}/test_pass] ne "1"} {
+        close_sim
+        error "$sim_top 未达到 PASS 检查点"
+    }
+    close_sim
+    puts "DAQ_IP_SIM_PASS=$sim_top"
+    return
+}
 
 # PS 使用原工程 DDR/MIO 配置；数据和描述符共用 HP0，控制走 GP0。
 create_bd_design system

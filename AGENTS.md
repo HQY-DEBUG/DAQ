@@ -6,6 +6,8 @@
 - 领航者 ZYNQ7020，xc7z020clg400-2，PS DDR 1 GB；Vivado/Vitis 固定 2022.1。
 - 有效采样率 1 MHz、每样本 64 bit（8 MB/s）。正常连接期间连续采集至少 72 小时；不得用静默丢样或降采样掩盖带宽不足。
 - PL：data_gen → ping-pong BRAM → AXI DMA → PS DDR。PS 为裸机，保留处理占位接口。
+- PL 必须按功能拆分为独立 Verilog 模块：数据发生、AXI-Lite 寄存器控制、ping-pong BRAM 缓冲及 AXI-Stream 输出各自负责明确功能，daq_core 负责顶层连接；模块仿真按功能分目录，拆分后仍需集成仿真和完整实现验证。
+- ping-pong BRAM 使用 Xilinx 官方 Block Memory Generator IP，不用手写 Verilog 存储数组推断替代。IP 配置由唯一 PL/daq.tcl 创建与维护，官方 IP 文件归入 PL/source/ip；缓冲模块只管理地址、读写和块所有权，验证必须覆盖实际 IP 模型的读延迟。
 - 模式：只上传、只存 SD、存储且上传。SD 满则报告错误；只存储时停止采集，双输出时继续上传。
 - PC：Visual Studio + Qt；接收、连续性校验、分卷保存、错误日志、实时波形。关闭 PC 保存不关闭接收校验。
 - 网络地址和协议外层框架不可修改，详细契约见 `Doc/控制协议/协议实现约定.md`。

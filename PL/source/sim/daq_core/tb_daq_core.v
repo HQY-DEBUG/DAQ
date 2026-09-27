@@ -1,11 +1,11 @@
 // 文件：tb_daq_core.v
 // 说明：daq_core 固定节拍、双块切换、反压、停机、溢出和 AXI-Lite 仿真
-// 版本：v1.3
-// 日期：2026/09/26
+// 版本：v1.4
+// 日期：2026/09/27
 // 修改历史：
+// v1.4 2026/09/27 修改：适配官方 BRAM IP，通过端口和块所有权检查复位
 // v1.3 2026/09/26 修改：采样有效脉冲期间断言复位，验证 RAM 写使能被门控
 // v1.2 2026/09/26 修改：验证复位不写 RAM 且旧内容不作为新会话数据输出
-// v1.1 2026/09/26 修改：补 4 KiB 非法地址、无副作用、随机反压与三类停采边界
 `timescale 1ns/1ps
 
 module tb_daq_core;
@@ -41,6 +41,7 @@ module tb_daq_core;
     reg hold_valid = 0;
     reg [63:0] held_data;
     reg held_last;
+    reg test_pass = 0;
 
     daq_core dut (
         .aclk(clk), .aresetn(rstn),
@@ -59,7 +60,14 @@ module tb_daq_core;
     endtask
 
     always @(posedge clk) begin
+        if (dut.buffer_0.bank0_ram.ena && dut.buffer_0.bank0_ram.enb)
+            fail("bank0 simultaneous read/write");
+        if (dut.buffer_0.bank1_ram.ena && dut.buffer_0.bank1_ram.enb)
+            fail("bank1 simultaneous read/write");
         if (rstn) lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
+        else if (dut.buffer_0.bank0_ram.ena || dut.buffer_0.bank1_ram.ena ||
+                 dut.buffer_0.bank0_ram.enb || dut.buffer_0.bank1_ram.enb)
+            fail("BRAM IP port enabled during reset");
     end
 
     // 保持检查跨越长反压和随机反压；仅有效握手推进期望样本。
@@ -271,12 +279,11 @@ module tb_daq_core;
         read_reg(7'h04, 32'h0);
         read_reg(7'h08, 32'd0);
 
-        // 2026/09/26 修改：RAM 内容不随复位清零，但输出所有权必须清除并只读完整的新块。
-        dut.bank0[0] = 64'hdeadcafe12345678;
+        // 2026/09/27 修改：经 IP 端口观察复位时写使能，输出所有权必须清除并只读新块。
         @(negedge clk); rstn = 0;
         repeat (4) @(negedge clk);
-        if (dut.bank0[0] !== 64'hdeadcafe12345678)
-            fail("RAM changed during reset");
+        if (dut.buffer_0.bank0_ram.ena || dut.buffer_0.bank1_ram.ena)
+            fail("RAM write enable active during reset");
         if (tvalid || dut.pending || dut.sampling) fail("reset leaked old block");
         rstn = 1;
         beats = 0;
@@ -289,15 +296,14 @@ module tb_daq_core;
         wait (beats == 4096);
         read_reg(7'h04, 32'd0);
 
-        // 2026/09/26 修改：在采样有效脉冲与 RAM 写入之间复位，写口不得使用旧脉冲。
+        // 2026/09/27 修改：采样脉冲期间复位时，两个 IP 写口均保持禁用。
         write_control(32'h2, 1);
-        dut.bank0[0] = 64'h456789abcdef0123;
         ready_manual = 0;
         write_control(32'h1, 0);
         wait (dut.sample_valid);
         rstn = 0;
         repeat (4) @(negedge clk);
-        if (dut.bank0[0] !== 64'h456789abcdef0123)
+        if (dut.buffer_0.bank0_ram.ena || dut.buffer_0.bank1_ram.ena)
             fail("RAM write enable active during reset");
         if (tvalid || dut.pending || dut.sampling) fail("reset retained active output");
         rstn = 1;
@@ -310,6 +316,7 @@ module tb_daq_core;
         wait (!dut.sampling);
         wait (beats == 4096);
         read_reg(7'h04, 32'd0);
+        test_pass = 1;
         $display("PASS: AXI-Lite errors, fixed rate, BRAM ownership, random stalls, stop boundaries, overflow/clear");
         $finish;
     end
