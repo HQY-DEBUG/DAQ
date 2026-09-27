@@ -8,6 +8,11 @@
 协议入口：Doc/控制协议/协议实现约定.md，保留原网络配置和外层帧结构。
 
 版本记录（最新优先）
+v1.11 2026/09/27
+- 基于官方 BRAM IP 版新 XSA，完成 Vitis 2022.1 standalone、lwip211 1.7、xilffs 4.7 平台探测；库产物、RAW_API、静态 IP、软件定时器与 exFAT 配置已核实。
+- 记录 ARM 语法预检结果：协议、DMA、main 通过，SD 存在格式告警，app 尚未适配新解析接口，完整 ELF 未链接。确认 YT8521SC_CA 需适配本机 lwIP PHY 分支。
+- 本阶段只提交准备证据；下一阶段将可复现构建纳入现有 xilinx.py，并继续 PS 源码与故障处理实现。硬件运行及 72 小时测试仍未进行。
+
 v1.10 2026/09/27
 - 完成模块化及官方 BRAM IP 版全量 Vivado 2022.1 构建与同一 daq.tcl verify；源码基线 68f0741，四项模块/集成仿真已在上一阶段通过。
 - 两个 Block Memory Generator IP 已链接到最终实现，顶层无黑盒、无锁存器，使用 RAMB36E1=15、RAMB18E1=3。100 MHz 时序 WNS=1.515 ns、WHS=0.040 ns，TNS/THS=0，未约束内部端点=0，无 REQP-1839/1840。
